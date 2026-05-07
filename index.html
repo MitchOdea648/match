@@ -693,7 +693,7 @@ async function fetchSquadId(cid) {
   throw new Error('Squad ID not found');
 }
 async function fetchMatchIds(sid, limit) {
-  const res = await fetchViaWorkerFallback(`${API_BASE}/matches?squadId=${sid}&past=true&limit=${limit}&onlyFriendliesHome=true`);
+  const res = await fetch(`${API_BASE}/matches?squadId=${sid}&past=true&limit=${limit}`);
   if (!res.ok) throw new Error(`Match list failed: ${res.status}`);
   return res.json();
 }
