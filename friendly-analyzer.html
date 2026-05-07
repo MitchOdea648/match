@@ -452,6 +452,19 @@ async function fetchBin(url) {
   if (new Uint8Array(buf)[0] !== 0x0A) throw new Error('Bad binary');
   return buf;
 }
+async function fetchViaWorkerFallback(url, options = {}) {
+  try {
+    const direct = await fetch(url, options);
+    if (direct.ok) return direct;
+    // If the API blocks direct browser access or returns an edge error, try the Worker fallback.
+    const proxied = await fetch(`${WORKER}?url=${encodeURIComponent(url)}`, options);
+    return proxied.ok ? proxied : direct;
+  } catch (directError) {
+    // Most commonly a CORS failure. Retry through the Worker.
+    return fetch(`${WORKER}?url=${encodeURIComponent(url)}`, options);
+  }
+}
+
 async function loadAllStates(matchId) {
   await loadProtobuf();
   const States = protobuf.Root.fromJSON(PROTO_SCHEMA).lookupType('mfl.States');
@@ -593,28 +606,69 @@ function extractBinary(states) {
 // API FETCHES
 // ═══════════════════════════════════════════════════════
 async function fetchSquadId(cid) {
-  const res = await fetch(`${API_BASE}/clubs/${cid}`);
+  const res = await fetchViaWorkerFallback(`${API_BASE}/clubs/${cid}`);
   if (!res.ok) throw new Error(`Club fetch failed: ${res.status}`);
   const text = await res.text();
-  const idx = text.indexOf(':[{"id":');
-  if (idx===-1) throw new Error('Squad ID not found');
-  const m = text.substring(idx+8).match(/^(\d+)/);
-  if (!m) throw new Error('Could not parse squad ID');
-  return m[1];
+
+  // Prefer JSON parsing when possible, but keep the original text fallback because the API
+  // response shape can vary.
+  try {
+    const data = JSON.parse(text);
+    const seen = new Set();
+    const walk = (node) => {
+      if (!node || typeof node !== 'object' || seen.has(node)) return null;
+      seen.add(node);
+
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          const found = walk(item);
+          if (found) return found;
+        }
+        return null;
+      }
+
+      // Common shapes: {squads:[{id:...}]}, {clubSquads:[{id:...}]}, etc.
+      for (const key of ['squads', 'clubSquads', 'teams']) {
+        if (Array.isArray(node[key]) && node[key][0]?.id) return String(node[key][0].id);
+      }
+
+      for (const value of Object.values(node)) {
+        const found = walk(value);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const parsedId = walk(data);
+    if (parsedId) return parsedId;
+  } catch (_) {}
+
+  const patterns = [
+    /"squads"\s*:\s*\[\s*\{\s*"id"\s*:\s*(\d+)/,
+    /"clubSquads"\s*:\s*\[\s*\{\s*"id"\s*:\s*(\d+)/,
+    /:\s*\[\s*\{\s*"id"\s*:\s*(\d+)/
+  ];
+
+  for (const pattern of patterns) {
+    const m = text.match(pattern);
+    if (m?.[1]) return m[1];
+  }
+
+  throw new Error('Squad ID not found');
 }
 async function fetchMatchIds(sid, limit) {
-  const res = await fetch(`${API_BASE}/matches?squadId=${sid}&past=true&limit=${limit}&onlyFriendliesHome=true`);
+  const res = await fetchViaWorkerFallback(`${API_BASE}/matches?squadId=${sid}&past=true&limit=${limit}&onlyFriendliesHome=true`);
   if (!res.ok) throw new Error(`Match list failed: ${res.status}`);
   return res.json();
 }
 async function fetchMatchReport(mid) {
-  const res = await fetch(`${API_BASE}/matches/${mid}/report`);
+  const res = await fetchViaWorkerFallback(`${API_BASE}/matches/${mid}/report`);
   if (!res.ok) throw new Error(`Report failed: ${res.status}`);
   return res.json();
 }
 async function fetchFormations(mid) {
   try {
-    const res = await fetch(`${API_BASE}/matches/${mid}?withFormations=true`);
+    const res = await fetchViaWorkerFallback(`${API_BASE}/matches/${mid}?withFormations=true`);
     return res.ok ? res.json() : null;
   } catch { return null; }
 }
@@ -637,7 +691,7 @@ async function loadMatches() {
     const matchList = await fetchMatchIds(squadId, limit);
     if (!matchList?.length) { setStatus('No friendly matches found','error'); document.getElementById('load-btn').disabled=false; return; }
     setStatus(`Loading ${matchList.length} matches (reports, formations & binary data)...`, 'loading');
-    allMatches = []; playerNamesCache = {};
+    allMatches = []; playerNamesCache = {}; aggregateShots = []; aggMatchIds = new Set(); hiddenPlayerRows.clear(); hiddenPlayerCols.clear();
     for (let i=0; i<matchList.length; i++) {
       const mid = String(matchList[i].id);
       setStatus(`[${i+1}/${matchList.length}] Loading match ${mid}...`, 'loading');
@@ -1508,6 +1562,11 @@ function closeComparisonView(){
   }
 }
 
+function csvEscape(value) {
+  const str = String(value ?? '');
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
 // ═══════════════════════════════════════════════════════
 // CSV EXPORT
 // ═══════════════════════════════════════════════════════
@@ -1534,7 +1593,7 @@ function downloadCSV(){
     rows.push([m.matchId,new Date(m.date).toISOString(),homeName,awayName,`${hg}-${ag}`,hg,ag,hs.xG.toFixed(2),as2.xG.toFixed(2),hs.shots,as2.shots,hs.shotsOnTarget,as2.shotsOnTarget,sAH,sAA,hPos,aPos,hs.passes,as2.passes,pAH,pAA,ddH,ddA,homeF,awayF,homeXI,awayXI,tac?tac.home.playingWidth.toFixed(1):'-',tac?tac.away.playingWidth.toFixed(1):'-',tac?tac.home.teamDepth.toFixed(1):'-',tac?tac.away.teamDepth.toFixed(1):'-',tac?tac.home.compactness.toFixed(1):'-',tac?tac.away.compactness.toFixed(1):'-',tac?tac.home.flankLeft.toFixed(1):'-',tac?tac.away.flankLeft.toFixed(1):'-',tac?tac.home.flankCentre.toFixed(1):'-',tac?tac.away.flankCentre.toFixed(1):'-',tac?tac.home.flankRight.toFixed(1):'-',tac?tac.away.flankRight.toFixed(1):'-']);
   });
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'}));
+  a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(csvEscape).join(',')).join('\n')],{type:'text/csv'}));
   a.download=`mfl_analysis_${Date.now()}.csv`;
   document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
