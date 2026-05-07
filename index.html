@@ -642,7 +642,7 @@ function extractBinary(states) {
 // API FETCHES
 // ═══════════════════════════════════════════════════════
 async function fetchSquadId(cid) {
-  const res = await fetchViaWorkerFallback(`${API_BASE}/clubs/${cid}`);
+  const res = await fetch(`${API_BASE}/clubs/${cid}`);
   if (!res.ok) throw new Error(`Club fetch failed: ${res.status}`);
   const text = await res.text();
 
@@ -698,13 +698,13 @@ async function fetchMatchIds(sid, limit) {
   return res.json();
 }
 async function fetchMatchReport(mid) {
-  const res = await fetchViaWorkerFallback(`${API_BASE}/matches/${mid}/report`);
+  const res = await fetch(`${API_BASE}/matches/${mid}/report`);
   if (!res.ok) throw new Error(`Report failed: ${res.status}`);
   return res.json();
 }
 async function fetchFormations(mid) {
   try {
-    const res = await fetchViaWorkerFallback(`${API_BASE}/matches/${mid}?withFormations=true`);
+    const res = await fetch(`${API_BASE}/matches/${mid}?withFormations=true`);
     return res.ok ? res.json() : null;
   } catch { return null; }
 }
