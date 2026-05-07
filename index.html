@@ -308,11 +308,11 @@
     <div class="divider"></div>
     <div class="section-title">Team Performance Averages</div>
     <div class="overview-pair">
-      <div class="overview-card home-card"><div class="overview-card-title">Home Team</div><div class="overview-card-sub" id="home-sub"></div><div class="stat-grid" id="home-stats"></div><div class="xi-summary" id="home-xi"></div></div>
-      <div class="overview-card away-card"><div class="overview-card-title">Away Team (Opponents)</div><div class="overview-card-sub" id="away-sub"></div><div class="stat-grid" id="away-stats"></div><div class="xi-summary" id="away-xi"></div></div>
+      <div class="overview-card home-card"><div class="overview-card-title">Selected Club</div><div class="overview-card-sub" id="home-sub"></div><div class="stat-grid" id="home-stats"></div><div class="xi-summary" id="home-xi"></div></div>
+      <div class="overview-card away-card"><div class="overview-card-title">Opponent</div><div class="overview-card-sub" id="away-sub"></div><div class="stat-grid" id="away-stats"></div><div class="xi-summary" id="away-xi"></div></div>
     </div>
     <div class="tactical-overview-card" id="tac-overview-card" style="display:none">
-      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:3px">Home Team Tactical Overview</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:3px">Selected Club Tactical Overview</div>
       <div style="font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;margin-bottom:14px" id="tac-overview-sub"></div>
       <div class="tactical-overview-inner">
         <div class="tactical-pitch-wrap"><div class="pitch-trio-inline" id="overview-pitch-trio"></div></div>
@@ -822,8 +822,76 @@ function extractPlayerMap(f) {
   return map;
 }
 function clubNames(f) {
-  return { homeName:f?.home?.name||'Home Team', awayName:f?.away?.name||'Away Team' };
+  return {
+    homeName:f?.home?.name||f?.homeSquad?.club?.name||f?.homeSquad?.name||'Home Team',
+    awayName:f?.away?.name||f?.awaySquad?.club?.name||f?.awaySquad?.name||'Away Team'
+  };
 }
+
+function getSelectedSide(match) {
+  const cid = String(clubId ?? '');
+  const sid = String(squadId ?? '');
+  const homeClubId = match.formations?.homeSquad?.club?.id;
+  const awayClubId = match.formations?.awaySquad?.club?.id;
+  const homeSquadId = match.formations?.homeSquad?.id;
+  const awaySquadId = match.formations?.awaySquad?.id;
+
+  if (cid && String(homeClubId) === cid) return 'home';
+  if (cid && String(awayClubId) === cid) return 'away';
+  if (sid && String(homeSquadId) === sid) return 'home';
+  if (sid && String(awaySquadId) === sid) return 'away';
+
+  return 'home';
+}
+
+function getOpponentSide(match) {
+  return getSelectedSide(match) === 'home' ? 'away' : 'home';
+}
+
+function sideTeam(match, side) {
+  return match.report?.[side];
+}
+function selectedTeam(match) { return sideTeam(match, getSelectedSide(match)); }
+function opponentTeam(match) { return sideTeam(match, getOpponentSide(match)); }
+
+function sideFormation(match, side) {
+  return side === 'home' ? match.formations?.homeFormation : match.formations?.awayFormation;
+}
+function sideName(match, side) {
+  const cn = clubNames(match.formations || {});
+  return side === 'home' ? cn.homeName : cn.awayName;
+}
+function sideXI(match, side) {
+  if (!match.formations) return 0;
+  const pm = extractPlayerMap(match.formations);
+  const form = sideFormation(match, side);
+  return form ? computeXI(form, pm) : 0;
+}
+function selectedSideShots(match) {
+  const side = getSelectedSide(match);
+  return (match.binary?.shots || []).filter(s => s.side === side);
+}
+function opponentSideShots(match) {
+  const side = getOpponentSide(match);
+  return (match.binary?.shots || []).filter(s => s.side === side);
+}
+function matchGoals(match) {
+  const h = match.report?.home, a = match.report?.away;
+  if (!h || !a) return null;
+  return {
+    home: h.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0,
+    away: a.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0
+  };
+}
+function sideGoals(match, side) {
+  const g = matchGoals(match);
+  return g ? g[side] : 0;
+}
+function selectedGoals(match) { return sideGoals(match, getSelectedSide(match)); }
+function opponentGoals(match) { return sideGoals(match, getOpponentSide(match)); }
+function selectedTactics(match) { return match.binary?.tactics?.[getSelectedSide(match)]; }
+function opponentTactics(match) { return match.binary?.tactics?.[getOpponentSide(match)]; }
+
 function computeXI(formation, pmap) {
   if (!formation?.positions) return 0;
   return formation.positions.reduce((sum,pos)=>{
@@ -845,10 +913,9 @@ function posSortVal(positions) {
 function calcRecord() {
   let w=0,d=0,l=0;
   allMatches.forEach(m=>{
-    const h=m.report?.home, a=m.report?.away; if(!h||!a) return;
-    const hg=h.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    const ag=a.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    if(hg>ag)w++;else if(hg===ag)d++;else l++;
+    const st=selectedTeam(m), ot=opponentTeam(m); if(!st||!ot) return;
+    const sg=selectedGoals(m), og=opponentGoals(m);
+    if(sg>og)w++;else if(sg===og)d++;else l++;
   });
   return{wins:w,draws:d,losses:l};
 }
@@ -870,29 +937,29 @@ function aggregateTeamStats(ps) {
 
 function calcTeamStats() {
   if(!allMatches.length) return null;
-  const hs={matches:0,goals:0,xG:0,shots:0,soT:0,passes:0,accPasses:0,crosses:0,accCrosses:0,fouls:0,yc:0,rc:0,ddWon:0,ddPast:0,shotsBlocked:0,ownGoals:0,cleanSheets:0,poss:0};
-  const as={...hs};
-  const hXI=[],aXI=[];
+  const selected={matches:0,goals:0,xG:0,shots:0,soT:0,passes:0,accPasses:0,crosses:0,accCrosses:0,fouls:0,yc:0,rc:0,ddWon:0,ddPast:0,shotsBlocked:0,ownGoals:0,cleanSheets:0,poss:0};
+  const opponent={...selected};
+  const sXI=[],oXI=[];
   allMatches.forEach(m=>{
-    const h=m.report?.home,a=m.report?.away; if(!h||!a) return;
-    hs.matches++;as.matches++;
-    const hg=h.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    const ag=a.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    hs.goals+=hg;as.goals+=ag;
-    h.playersStats?.forEach(p=>{hs.xG+=p.xG||0;hs.shots+=p.shots||0;hs.soT+=p.shotsOnTarget||0;hs.passes+=p.passes||0;hs.accPasses+=p.passesAccurate||0;hs.crosses+=p.crosses||0;hs.accCrosses+=p.crossesAccurate||0;hs.fouls+=p.foulsCommitted||0;hs.yc+=p.yellowCards||0;hs.rc+=p.redCards||0;hs.ddWon+=p.defensiveDuelsWon||0;hs.ddPast+=p.dribbledPast||0;hs.shotsBlocked+=p.shotsInterceptions||0;hs.ownGoals+=p.ownGoals||0;});
-    a.playersStats?.forEach(p=>{as.xG+=p.xG||0;as.shots+=p.shots||0;as.soT+=p.shotsOnTarget||0;as.passes+=p.passes||0;as.accPasses+=p.passesAccurate||0;as.crosses+=p.crosses||0;as.accCrosses+=p.crossesAccurate||0;as.fouls+=p.foulsCommitted||0;as.yc+=p.yellowCards||0;as.rc+=p.redCards||0;as.ddWon+=p.defensiveDuelsWon||0;as.ddPast+=p.dribbledPast||0;as.shotsBlocked+=p.shotsInterceptions||0;as.ownGoals+=p.ownGoals||0;});
-    if(ag===0)hs.cleanSheets++;if(hg===0)as.cleanSheets++;
-    const hp=h.playersStats?.reduce((s,p)=>s+(p.passes||0),0)||0;
-    const ap=a.playersStats?.reduce((s,p)=>s+(p.passes||0),0)||0;
-    const tp=hp+ap;if(tp>0){hs.poss+=hp/tp*100;as.poss+=ap/tp*100;}
-    if(m.formations){const pm=extractPlayerMap(m.formations);if(m.formations.homeFormation){const v=computeXI(m.formations.homeFormation,pm);if(v>0)hXI.push(v);}if(m.formations.awayFormation){const v=computeXI(m.formations.awayFormation,pm);if(v>0)aXI.push(v);}}
+    const st=selectedTeam(m), ot=opponentTeam(m); if(!st||!ot) return;
+    const ss=getSelectedSide(m), os=getOpponentSide(m);
+    selected.matches++;opponent.matches++;
+    const sg=selectedGoals(m), og=opponentGoals(m);
+    selected.goals+=sg;opponent.goals+=og;
+    st.playersStats?.forEach(p=>{selected.xG+=p.xG||0;selected.shots+=p.shots||0;selected.soT+=p.shotsOnTarget||0;selected.passes+=p.passes||0;selected.accPasses+=p.passesAccurate||0;selected.crosses+=p.crosses||0;selected.accCrosses+=p.crossesAccurate||0;selected.fouls+=p.foulsCommitted||0;selected.yc+=p.yellowCards||0;selected.rc+=p.redCards||0;selected.ddWon+=p.defensiveDuelsWon||0;selected.ddPast+=p.dribbledPast||0;selected.shotsBlocked+=p.shotsInterceptions||0;selected.ownGoals+=p.ownGoals||0;});
+    ot.playersStats?.forEach(p=>{opponent.xG+=p.xG||0;opponent.shots+=p.shots||0;opponent.soT+=p.shotsOnTarget||0;opponent.passes+=p.passes||0;opponent.accPasses+=p.passesAccurate||0;opponent.crosses+=p.crosses||0;opponent.accCrosses+=p.crossesAccurate||0;opponent.fouls+=p.foulsCommitted||0;opponent.yc+=p.yellowCards||0;opponent.rc+=p.redCards||0;opponent.ddWon+=p.defensiveDuelsWon||0;opponent.ddPast+=p.dribbledPast||0;opponent.shotsBlocked+=p.shotsInterceptions||0;opponent.ownGoals+=p.ownGoals||0;});
+    if(og===0)selected.cleanSheets++;if(sg===0)opponent.cleanSheets++;
+    const sp=st.playersStats?.reduce((s,p)=>s+(p.passes||0),0)||0;
+    const op=ot.playersStats?.reduce((s,p)=>s+(p.passes||0),0)||0;
+    const tp=sp+op;if(tp>0){selected.poss+=sp/tp*100;opponent.poss+=op/tp*100;}
+    const sx=sideXI(m,ss), ox=sideXI(m,os); if(sx>0)sXI.push(sx); if(ox>0)oXI.push(ox);
   });
-  const mc=hs.matches||1;
+  const mc=selected.matches||1;
   const f1=v=>(v/mc).toFixed(1),f2=v=>(v/mc).toFixed(2);
   const xi=vals=>vals.length?{min:Math.min(...vals),max:Math.max(...vals),avg:(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1)}:{min:'-',max:'-',avg:'-'};
   const fmt=s=>({
     matches:mc,goals:f2(s.goals),xG:f2(s.xG),shots:f1(s.shots),soT:f1(s.soT),
-    shotAcc:s.shots>0?((s.soT/s.shots)*100/mc*mc).toFixed(1):'0',
+    shotAcc:s.shots>0?((s.soT/s.shots)*100).toFixed(1):'0',
     poss:(s.poss/mc).toFixed(1),passes:(s.passes/mc).toFixed(0),
     passAcc:s.passes>0?((s.accPasses/s.passes)*100).toFixed(1):'0',
     crosses:(s.crosses/mc).toFixed(1),crossAcc:s.crosses>0?((s.accCrosses/s.crosses)*100).toFixed(1):'0',
@@ -901,13 +968,14 @@ function calcTeamStats() {
     totalDuels:((s.ddWon+s.ddPast)/mc).toFixed(1),
     shotsBlocked:f1(s.shotsBlocked),ownGoals:f2(s.ownGoals),cleanSheets:s.cleanSheets,
   });
-  return{home:{...fmt(hs),xiOverall:xi(hXI)},away:{...fmt(as),xiOverall:xi(aXI)}};
+  return{home:{...fmt(selected),xiOverall:xi(sXI)},away:{...fmt(opponent),xiOverall:xi(oXI)}};
 }
 
 function calcPlayerStats() {
   const agg={};
   allMatches.forEach(m=>{
-    m.report?.home?.playersStats?.forEach(p=>{
+    const st=selectedTeam(m);
+    st?.playersStats?.forEach(p=>{
       const pid=String(p.playerId);
       if(!agg[pid]) agg[pid]={playerId:pid,playerName:playerNamesCache[pid]||`Player ${pid}`,appearances:0,goals:0,assists:0,xG:0,shots:0,shotsOnTarget:0,chancesCreated:0,passes:0,passesAccurate:0,crosses:0,crossesAccurate:0,dribblingSuccess:0,dribbledPast:0,defensiveDuelsWon:0,defensiveDuelsTotal:0,clearances:0,shotsInterceptions:0,shotsIntercepted:0,fouls:0,foulsSuffered:0,yellowCards:0,redCards:0,ownGoals:0,saves:0,goalsConceded:0,ratingSum:0,positions:new Set()};
       const a=agg[pid];
@@ -990,14 +1058,15 @@ function renderTeamOverview() {
 }
 
 function renderTacticalOverview() {
-  const mb=allMatches.filter(m=>m.binary);
+  const mb=allMatches.filter(m=>m.binary && selectedTactics(m));
   if(!mb.length){document.getElementById('tac-overview-card').style.display='none';return;}
   const posH=Array.from({length:11},()=>({xs:[],ys:[]}));
   const posHP=Array.from({length:11},()=>({xs:[],ys:[]}));
   const posHD=Array.from({length:11},()=>({xs:[],ys:[]}));
   const wW=[],dD=[],cC=[],fL=[],fC=[],fR=[];
+  let lastSide='home';
   mb.forEach(m=>{
-    const t=m.binary.tactics.home;
+    const side=getSelectedSide(m), t=selectedTactics(m); lastSide=side;
     if(t.playingWidth>0)wW.push(t.playingWidth);
     if(t.teamDepth>0)dD.push(t.teamDepth);
     if(t.compactness>0)cC.push(t.compactness);
@@ -1008,9 +1077,9 @@ function renderTacticalOverview() {
   });
   const mkPos=acc=>acc.map((p,i)=>p.xs.length?{index:i,x:avg(p.xs),y:avg(p.ys)}:null).filter(Boolean);
   document.getElementById('overview-pitch-trio').innerHTML=`
-    <div><div class="pitch-card-label home">Overall</div>${renderPitchSVG(mkPos(posH),'home',160,240)}</div>
-    <div><div class="pitch-card-label home">In Possession</div>${renderPitchSVG(mkPos(posHP),'home',160,240)}</div>
-    <div><div class="pitch-card-label home">Defensive</div>${renderPitchSVG(mkPos(posHD),'home',160,240)}</div>`;
+    <div><div class="pitch-card-label home">Overall</div>${renderPitchSVG(mkPos(posH),lastSide,160,240)}</div>
+    <div><div class="pitch-card-label home">In Possession</div>${renderPitchSVG(mkPos(posHP),lastSide,160,240)}</div>
+    <div><div class="pitch-card-label home">Defensive</div>${renderPitchSVG(mkPos(posHD),lastSide,160,240)}</div>`;
 
   const aw=avg(wW),ad=avg(dD),ac=avg(cC),al=avg(fL),actr=avg(fC),ar=avg(fR);
   const mbar=(label,val,max,suffix,tip)=>{
@@ -1029,7 +1098,7 @@ function renderTacticalOverview() {
     mbar('Flank — Centre',actr,100,'%','Ball time in central areas during possession')+
     mbar('Flank — Right',ar,100,'%','Ball time on right flank during possession');
   document.getElementById('tac-note').textContent=`Based on ${mb.length}/${allMatches.length} matches with binary data`;
-  document.getElementById('tac-overview-sub').textContent=`Average positions & shape metrics across ${mb.length} matches (15s transition buffer)`;
+  document.getElementById('tac-overview-sub').textContent=`Average positions & shape metrics for selected club across ${mb.length} matches (15s transition buffer)`;
   document.getElementById('tac-overview-card').style.display='';
 }
 
@@ -1057,19 +1126,24 @@ function renderAggPanel() {
 function renderAggContent() {
   const el=document.getElementById('agg-content'); if(!el) return;
   const ZXL=['6 Yd','Close','Pen Area','Edge Box','Long'], ZYL=['Far L','Left','Centre','Right','Far R'];
+  const shotBelongs=(shot,group)=>{
+    const m=allMatches.find(x=>String(x.matchId)===String(shot.matchId));
+    if(!m) return false;
+    return group==='selected' ? shot.side===getSelectedSide(m) : shot.side===getOpponentSide(m);
+  };
   const getSZ=(x,y,side)=>{
     const nx=side==='away'?105-x:x,ny=side==='away'?68-y:y;
     let xZ;if(nx>101)xZ=0;else if(nx>93)xZ=1;else if(nx>88.5)xZ=2;else if(nx>80)xZ=3;else xZ=4;
     let yZ;if(ny<11)yZ=0;else if(ny<27.5)yZ=1;else if(ny<40.5)yZ=2;else if(ny<57)yZ=3;else yZ=4;
     return{xZ,yZ};
   };
-  const zGrid=side=>{
-    const ts=aggregateShots.filter(s=>s.side===side);
+  const zGrid=group=>{
+    const ts=aggregateShots.filter(s=>shotBelongs(s,group));
     const z=Array.from({length:5},()=>Array.from({length:5},()=>({g:0,s:0,o:0,b:0,t:0})));
-    for(const s of ts){const{xZ,yZ}=getSZ(s.x,s.y,side),zz=z[xZ][yZ];zz.t++;if(s.outcome==='goal')zz.g++;else if(s.outcome==='on_target')zz.s++;else if(s.outcome==='off_target')zz.o++;else zz.b++;}
+    for(const s of ts){const{xZ,yZ}=getSZ(s.x,s.y,s.side),zz=z[xZ][yZ];zz.t++;if(s.outcome==='goal')zz.g++;else if(s.outcome==='on_target')zz.s++;else if(s.outcome==='off_target')zz.o++;else zz.b++;}
     const maxT=Math.max(...z.flat().map(zz=>zz.t),1);
     const val=zz=>aggMode==='goals'?zz.g:aggMode==='shots'?zz.t:`${zz.g}/${zz.t}`;
-    const col=aggMode==='goals'?'#FFD700':aggMode==='shots'?'#e2e8f0':'#38bdf8';
+    const col=aggMode==='goals'?'#FFD700':aggMode==='shots'?'#e2e8f0':(group==='selected'?'#38bdf8':'#eeff00');
     let h=`<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:2px">`;
     for(let x=0;x<5;x++)for(let y=0;y<5;y++){
       const zz=z[x][y],a=0.15+(zz.t/maxT)*0.45;
@@ -1079,34 +1153,34 @@ function renderAggContent() {
     return h+'</div>';
   };
   const st=arr=>({total:arr.length,goals:arr.filter(s=>s.outcome==='goal').length,onTgt:arr.filter(s=>['goal','on_target'].includes(s.outcome)).length,offTgt:arr.filter(s=>s.outcome==='off_target').length,blocked:arr.filter(s=>s.outcome==='blocked').length,xG:arr.reduce((a,s)=>a+s.xG,0),pens:arr.filter(s=>s.isPenalty).length,penG:arr.filter(s=>s.isPenalty&&s.outcome==='goal').length,headers:arr.filter(s=>s.isHeader&&!s.isPenalty).length,fks:arr.filter(s=>s.isFreeKick).length});
-  const hs=st(aggregateShots.filter(s=>s.side==='home')),as=st(aggregateShots.filter(s=>s.side==='away'));
-  const row=(l,hv,av)=>`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;color:var(--text-secondary);font-size:12px">${l}</td><td style="text-align:center;padding:5px 8px;color:var(--accent);font-weight:700;font-size:13px;font-family:'JetBrains Mono',monospace">${hv}</td><td style="text-align:center;padding:5px 8px;color:var(--text-secondary);font-size:13px;font-family:'JetBrains Mono',monospace">${av}</td></tr>`;
+  const ss=st(aggregateShots.filter(s=>shotBelongs(s,'selected'))), os=st(aggregateShots.filter(s=>shotBelongs(s,'opponent')));
+  const row=(l,hv,av)=>`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;color:var(--text-secondary);font-size:12px">${l}</td><td style="text-align:center;padding:5px 8px;color:var(--accent);font-weight:700;font-size:13px;font-family:'JetBrains Mono',monospace">${hv}</td><td style="text-align:center;padding:5px 8px;color:var(--yellow);font-size:13px;font-family:'JetBrains Mono',monospace">${av}</td></tr>`;
   el.innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.05)">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;text-align:center">Home — Shot Zones</div>${zGrid('home')}</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;text-align:center">Selected Club — Shot Zones</div>${zGrid('selected')}</div>
       <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.05)">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--yellow);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;text-align:center">Away — Shot Zones</div>${zGrid('away')}</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--yellow);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;text-align:center">Opponent — Shot Zones</div>${zGrid('opponent')}</div>
     </div>
     <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.05)">
       <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--yellow);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Combined Breakdown</div>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr style="border-bottom:2px solid rgba(238,255,0,0.2)">
           <th style="text-align:left;padding:6px 8px;color:var(--text-muted);font-size:10px;font-family:'JetBrains Mono',monospace;text-transform:uppercase">Metric</th>
-          <th style="text-align:center;padding:6px 8px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace;text-transform:uppercase">Home</th>
-          <th style="text-align:center;padding:6px 8px;color:var(--text-muted);font-size:10px;font-family:'JetBrains Mono',monospace;text-transform:uppercase">Away</th>
+          <th style="text-align:center;padding:6px 8px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace;text-transform:uppercase">Selected</th>
+          <th style="text-align:center;padding:6px 8px;color:var(--yellow);font-size:10px;font-family:'JetBrains Mono',monospace;text-transform:uppercase">Opponent</th>
         </tr></thead><tbody>
-        ${row('Total Shots',hs.total,as.total)}
-        ${row('Goals',hs.goals,as.goals)}
-        ${row('On Target',hs.onTgt,as.onTgt)}
-        ${row('Off Target',hs.offTgt,as.offTgt)}
-        ${row('Blocked',hs.blocked,as.blocked)}
-        ${row('Total xG',hs.xG.toFixed(2),as.xG.toFixed(2))}
-        ${row('xG/Shot',hs.total?(hs.xG/hs.total).toFixed(3):'0.000',as.total?(as.xG/as.total).toFixed(3):'0.000')}
-        ${row('Conversion%',hs.total?(hs.goals/hs.total*100).toFixed(1)+'%':'0%',as.total?(as.goals/as.total*100).toFixed(1)+'%':'0%')}
-        ${row('Headers',hs.headers,as.headers)}
-        ${row('Free Kicks',hs.fks,as.fks)}
-        ${row('Penalties',`${hs.pens} (${hs.penG} scored)`,`${as.pens} (${as.penG} scored)`)}
+        ${row('Total Shots',ss.total,os.total)}
+        ${row('Goals',ss.goals,os.goals)}
+        ${row('On Target',ss.onTgt,os.onTgt)}
+        ${row('Off Target',ss.offTgt,os.offTgt)}
+        ${row('Blocked',ss.blocked,os.blocked)}
+        ${row('Total xG',ss.xG.toFixed(2),os.xG.toFixed(2))}
+        ${row('xG/Shot',ss.total?(ss.xG/ss.total).toFixed(3):'0.000',os.total?(os.xG/os.total).toFixed(3):'0.000')}
+        ${row('Conversion%',ss.total?(ss.goals/ss.total*100).toFixed(1)+'%':'0%',os.total?(os.goals/os.total*100).toFixed(1)+'%':'0%')}
+        ${row('Headers',ss.headers,os.headers)}
+        ${row('Free Kicks',ss.fks,os.fks)}
+        ${row('Penalties',`${ss.pens} (${ss.penG} scored)`,`${os.pens} (${os.penG} scored)`)}
         </tbody></table></div>`;
 }
 
@@ -1206,36 +1280,28 @@ function applyHiddenColumns() {
 function renderMatches() {
   const container=document.getElementById('matches-container');
   container.innerHTML='';
-  // Build away formation filter buttons
-  const awayForms=new Set();
-  allMatches.forEach(m=>{const f=m.formations?.awayFormation?.type;if(f)awayForms.add(f);});
+  const oppForms=new Set();
+  allMatches.forEach(m=>{const f=sideFormation(m,getOpponentSide(m))?.type;if(f)oppForms.add(f);});
   const fc=document.getElementById('filter-controls');
   fc.querySelectorAll('.form-filter,.filter-sep-dyn').forEach(b=>b.remove());
-  if(awayForms.size){
+  if(oppForms.size){
     const sep=document.createElement('div');sep.className='filter-sep filter-sep-dyn';fc.appendChild(sep);
-    [...awayForms].sort().forEach(f=>{
+    [...oppForms].sort().forEach(f=>{
       const btn=document.createElement('button');
       btn.className='filter-btn form-filter';btn.dataset.filter=`formation:${f}`;btn.textContent=f;
-      btn.addEventListener('click',()=>{
-        document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-        btn.classList.add('active');currentMatchFilter=`formation:${f}`;applyMatchFilter();
-      });
+      btn.addEventListener('click',()=>{document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentMatchFilter=`formation:${f}`;applyMatchFilter();});
       fc.appendChild(btn);
     });
   }
 
   allMatches.forEach(match=>{
-    const h=match.report?.home,a=match.report?.away; if(!h||!a) return;
-    const hg=h.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    const ag=a.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    const hs=aggregateTeamStats(h.playersStats), as2=aggregateTeamStats(a.playersStats);
-    let homeName='Home',awayName='Away',homeF='-',awayF='-',homeXI=0,awayXI=0;
-    if(match.formations){
-      const pm=extractPlayerMap(match.formations),cn=clubNames(match.formations);
-      homeName=cn.homeName;awayName=cn.awayName;
-      if(match.formations.homeFormation){homeF=match.formations.homeFormation.type||'-';homeXI=computeXI(match.formations.homeFormation,pm);}
-      if(match.formations.awayFormation){awayF=match.formations.awayFormation.type||'-';awayXI=computeXI(match.formations.awayFormation,pm);}
-    }
+    const ss=getSelectedSide(match), os=getOpponentSide(match);
+    const h=selectedTeam(match), a=opponentTeam(match); if(!h||!a) return;
+    const hg=selectedGoals(match), ag=opponentGoals(match);
+    const hs=aggregateTeamStats(h.playersStats), as2=aggregateTeamStats(a.playersStats); if(!hs||!as2) return;
+    const homeName=sideName(match,ss), awayName=sideName(match,os);
+    const homeF=sideFormation(match,ss)?.type||'-', awayF=sideFormation(match,os)?.type||'-';
+    const homeXI=sideXI(match,ss)||0, awayXI=sideXI(match,os)||0;
     const hp=h.playersStats?.reduce((s,p)=>s+(p.passes||0),0)||0;
     const ap=a.playersStats?.reduce((s,p)=>s+(p.passes||0),0)||0;
     const tp=hp+ap;
@@ -1244,13 +1310,13 @@ function renderMatches() {
 
     const div=document.createElement('div');
     div.className='match-item';
-    div.dataset.homeGoals=hg;div.dataset.awayGoals=ag;div.dataset.awayFormation=awayF;
+    div.dataset.selectedGoals=hg;div.dataset.opponentGoals=ag;div.dataset.opponentFormation=awayF;
 
     div.innerHTML=`<div class="match-main">
       <div class="match-header-row">
         <div>
           <div class="match-teams-title">${homeName} vs ${awayName}</div>
-          <div class="match-meta">${new Date(match.date).toLocaleString()} · ID: ${match.matchId}
+          <div class="match-meta">${new Date(match.date).toLocaleString()} · ID: ${match.matchId} · ${ss.toUpperCase()}
             <a href="https://app.playmfl.com/matches/${match.matchId}" target="_blank" class="match-link" onclick="event.stopPropagation()">🔗 MFL</a>
           </div>
         </div>
@@ -1259,7 +1325,7 @@ function renderMatches() {
           <span class="match-toggle">▼</span>
         </div>
       </div>
-      <div class="match-score-big">${hg} – ${ag}</div>
+      <div class="match-score-big"><span style="color:var(--accent)">${hg}</span> – <span style="color:var(--yellow)">${ag}</span></div>
       <div class="match-quick-stats">
         <div class="quick-stat-card"><div class="quick-stat-label" title="Formation">Formation</div><div class="quick-stat-values"><span class="quick-stat-home">${homeF}</span><span class="quick-stat-separator">vs</span><span class="quick-stat-away">${awayF}</span></div></div>
         <div class="quick-stat-card"><div class="quick-stat-label" title="Starting XI Overall">XI Overall</div><div class="quick-stat-values"><span class="quick-stat-home">${homeXI}</span><span class="quick-stat-separator">vs</span><span class="quick-stat-away">${awayXI}</span></div></div>
@@ -1270,7 +1336,6 @@ function renderMatches() {
       </div>
     </div>`;
 
-    // Build expanded details
     const details=document.createElement('div');
     details.className='match-details';
     let dHTML=`<div class="details-title">Complete Match Statistics</div>
@@ -1280,64 +1345,57 @@ function renderMatches() {
       </div>`;
 
     if(match.binary){
-      const t=match.binary.tactics;
-      const embar=(label,val,max,suf,side,tip)=>{
-        const pct=max>0?Math.min(val/max*100,100):0;
-        return`<div class="exp-tac-metric">
-          <div class="exp-tac-label" title="${tip}">${label}</div>
-          <div class="exp-tac-bar-wrap"><div class="exp-tac-bar-${side}" style="width:${pct}%"></div></div>
-          <div class="exp-tac-value-${side}">${val.toFixed(1)}${suf}</div>
-        </div>`;
-      };
-      dHTML+=`<div class="details-title" style="margin-top:4px">Tactical Shape (15s transition buffer)</div>
-        <div class="expanded-tactic-grid">
-          <div class="exp-tac-panel home"><div class="exp-tac-title">${homeName}</div>
-            ${embar('Playing Width',t.home.playingWidth,68,'m','home','The distance in metres between the leftmost and rightmost outfield player while in possession')}
-            ${embar('Def. Line Height',t.home.teamDepth,105,'m','home','Average X position of outfield players during opponent possession')}
-            ${embar('Compactness',t.home.compactness,60,'m','home','Distance between the deepest and highest outfield player during opponent possession')}
-            ${embar('Flank — Left',t.home.flankLeft,100,'%','home','Ball time on left flank during possession')}
-            ${embar('Flank — Centre',t.home.flankCentre,100,'%','home','Ball time in central areas during possession')}
-            ${embar('Flank — Right',t.home.flankRight,100,'%','home','Ball time on right flank during possession')}
-          </div>
-          <div class="exp-tac-panel away"><div class="exp-tac-title">${awayName}</div>
-            ${embar('Playing Width',t.away.playingWidth,68,'m','away','The distance in metres between the leftmost and rightmost outfield player while in possession')}
-            ${embar('Def. Line Height',t.away.teamDepth,105,'m','away','Average X position of outfield players during opponent possession')}
-            ${embar('Compactness',t.away.compactness,60,'m','away','Distance between the deepest and highest outfield player during opponent possession')}
-            ${embar('Flank — Left',t.away.flankLeft,100,'%','away','Ball time on left flank during possession')}
-            ${embar('Flank — Centre',t.away.flankCentre,100,'%','away','Ball time in central areas during possession')}
-            ${embar('Flank — Right',t.away.flankRight,100,'%','away','Ball time on right flank during possession')}
-          </div>
-        </div>`;
-
-      dHTML+=`<div class="details-title" style="margin-top:4px">Average Positions</div>
-        <div class="exp-pos-section">
-          <div class="exp-pos-team-label home">${homeName}</div>
-          <div class="exp-pos-grid" style="margin-bottom:14px">
-            <div><div class="pitch-card-label home">Overall</div>${renderPitchSVG(t.home.avgPositions,'home')}</div>
-            <div><div class="pitch-card-label home">In Possession</div>${renderPitchSVG(t.home.avgPossPositions,'home')}</div>
-            <div><div class="pitch-card-label home">Defensive</div>${renderPitchSVG(t.home.avgDefPositions,'home')}</div>
-          </div>
-          <div class="exp-pos-team-label away">${awayName}</div>
-          <div class="exp-pos-grid">
-            <div><div class="pitch-card-label away">Overall</div>${renderPitchSVG(t.away.avgPositions,'away')}</div>
-            <div><div class="pitch-card-label away">In Possession</div>${renderPitchSVG(t.away.avgPossPositions,'away')}</div>
-            <div><div class="pitch-card-label away">Defensive</div>${renderPitchSVG(t.away.avgDefPositions,'away')}</div>
-          </div>
-        </div>`;
-
+      const st=selectedTactics(match), ot=opponentTactics(match);
+      if(st&&ot){
+        const embar=(label,val,max,suf,side,tip)=>{const pct=max>0?Math.min(val/max*100,100):0;return`<div class="exp-tac-metric"><div class="exp-tac-label" title="${tip}">${label}</div><div class="exp-tac-bar-wrap"><div class="exp-tac-bar-${side}" style="width:${pct}%"></div></div><div class="exp-tac-value-${side}">${val.toFixed(1)}${suf}</div></div>`;};
+        dHTML+=`<div class="details-title" style="margin-top:4px">Tactical Shape (15s transition buffer)</div>
+          <div class="expanded-tactic-grid">
+            <div class="exp-tac-panel home"><div class="exp-tac-title">${homeName}</div>
+              ${embar('Playing Width',st.playingWidth,68,'m','home','The distance in metres between the leftmost and rightmost outfield player while in possession')}
+              ${embar('Def. Line Height',st.teamDepth,105,'m','home','Average X position of outfield players during opponent possession')}
+              ${embar('Compactness',st.compactness,60,'m','home','Distance between the deepest and highest outfield player during opponent possession')}
+              ${embar('Flank — Left',st.flankLeft,100,'%','home','Ball time on left flank during possession')}
+              ${embar('Flank — Centre',st.flankCentre,100,'%','home','Ball time in central areas during possession')}
+              ${embar('Flank — Right',st.flankRight,100,'%','home','Ball time on right flank during possession')}
+            </div>
+            <div class="exp-tac-panel away"><div class="exp-tac-title">${awayName}</div>
+              ${embar('Playing Width',ot.playingWidth,68,'m','away','The distance in metres between the leftmost and rightmost outfield player while in possession')}
+              ${embar('Def. Line Height',ot.teamDepth,105,'m','away','Average X position of outfield players during opponent possession')}
+              ${embar('Compactness',ot.compactness,60,'m','away','Distance between the deepest and highest outfield player during opponent possession')}
+              ${embar('Flank — Left',ot.flankLeft,100,'%','away','Ball time on left flank during possession')}
+              ${embar('Flank — Centre',ot.flankCentre,100,'%','away','Ball time in central areas during possession')}
+              ${embar('Flank — Right',ot.flankRight,100,'%','away','Ball time on right flank during possession')}
+            </div>
+          </div>`;
+        dHTML+=`<div class="details-title" style="margin-top:4px">Average Positions</div>
+          <div class="exp-pos-section">
+            <div class="exp-pos-team-label home">${homeName}</div>
+            <div class="exp-pos-grid" style="margin-bottom:14px">
+              <div><div class="pitch-card-label home">Overall</div>${renderPitchSVG(st.avgPositions,ss)}</div>
+              <div><div class="pitch-card-label home">In Possession</div>${renderPitchSVG(st.avgPossPositions,ss)}</div>
+              <div><div class="pitch-card-label home">Defensive</div>${renderPitchSVG(st.avgDefPositions,ss)}</div>
+            </div>
+            <div class="exp-pos-team-label away">${awayName}</div>
+            <div class="exp-pos-grid">
+              <div><div class="pitch-card-label away">Overall</div>${renderPitchSVG(ot.avgPositions,os)}</div>
+              <div><div class="pitch-card-label away">In Possession</div>${renderPitchSVG(ot.avgPossPositions,os)}</div>
+              <div><div class="pitch-card-label away">Defensive</div>${renderPitchSVG(ot.avgDefPositions,os)}</div>
+            </div>
+          </div>`;
+      }
       if(match.binary.shots?.length){
         dHTML+=`<div class="details-title yellow" style="margin-top:4px">Shot Analysis</div>
           <div class="shot-maps-grid">
-            <div class="shot-map-card"><div class="shot-map-title">${homeName}</div>${renderShotMapSVG(match.binary.shots,'home')}</div>
-            <div class="shot-map-card"><div class="shot-map-title">${awayName}</div>${renderShotMapSVG(match.binary.shots,'away')}</div>
+            <div class="shot-map-card"><div class="shot-map-title">${homeName}</div>${renderShotMapSVG(match.binary.shots,ss)}</div>
+            <div class="shot-map-card"><div class="shot-map-title">${awayName}</div>${renderShotMapSVG(match.binary.shots,os)}</div>
           </div>
           <div class="zone-grid-wrapper">
-            <div class="zone-grid-card"><div class="zone-grid-title">${homeName} — Shot Zones</div>${renderZoneGrid(match.binary.shots,'home')}</div>
-            <div class="zone-grid-card"><div class="zone-grid-title">${awayName} — Shot Zones</div>${renderZoneGrid(match.binary.shots,'away')}</div>
+            <div class="zone-grid-card"><div class="zone-grid-title">${homeName} — Shot Zones</div>${renderZoneGrid(match.binary.shots,ss)}</div>
+            <div class="zone-grid-card"><div class="zone-grid-title">${awayName} — Shot Zones</div>${renderZoneGrid(match.binary.shots,os)}</div>
           </div>
           <div class="shot-type-grid">
-            <div class="shot-type-card"><div class="shot-type-title">${homeName} — Breakdown</div>${renderShotBreakdown(match.binary.shots,'home')}</div>
-            <div class="shot-type-card"><div class="shot-type-title">${awayName} — Breakdown</div>${renderShotBreakdown(match.binary.shots,'away')}</div>
+            <div class="shot-type-card"><div class="shot-type-title">${homeName} — Breakdown</div>${renderShotBreakdown(match.binary.shots,ss)}</div>
+            <div class="shot-type-card"><div class="shot-type-title">${awayName} — Breakdown</div>${renderShotBreakdown(match.binary.shots,os)}</div>
           </div>`;
       }
     }
@@ -1348,10 +1406,7 @@ function renderMatches() {
 
     details.innerHTML=dHTML;
     div.appendChild(details);
-    div.querySelector('.match-main').addEventListener('click',e=>{
-      if(e.target.closest('.btn-danger')||e.target.closest('.match-link'))return;
-      div.classList.toggle('expanded');
-    });
+    div.querySelector('.match-main').addEventListener('click',e=>{if(e.target.closest('.btn-danger')||e.target.closest('.match-link'))return;div.classList.toggle('expanded');});
     container.appendChild(div);
   });
   setTimeout(()=>applyMatchFilter(),0);
@@ -1360,9 +1415,9 @@ function renderMatches() {
 function applyMatchFilter() {
   let visible=0;
   document.querySelectorAll('.match-item').forEach(item=>{
-    const hg=parseInt(item.dataset.homeGoals)||0,ag=parseInt(item.dataset.awayGoals)||0;
-    const result=hg>ag?'win':hg===ag?'draw':'loss';
-    const af=item.dataset.awayFormation||'';
+    const sg=parseInt(item.dataset.selectedGoals)||0,og=parseInt(item.dataset.opponentGoals)||0;
+    const result=sg>og?'win':sg===og?'draw':'loss';
+    const af=item.dataset.opponentFormation||'';
     let show=false;
     if(currentMatchFilter==='all')show=true;
     else if(currentMatchFilter==='wins'&&result==='win')show=true;
@@ -1495,7 +1550,7 @@ function confirmSaveAnalysis(){
   let tacticalAvgs=null;
   if(mb.length){
     const wW=[],dD=[],cC=[],fL=[],fC=[],fR=[];
-    mb.forEach(m=>{const t=m.binary.tactics.home;if(t.playingWidth>0)wW.push(t.playingWidth);if(t.teamDepth>0)dD.push(t.teamDepth);if(t.compactness>0)cC.push(t.compactness);fL.push(t.flankLeft);fC.push(t.flankCentre);fR.push(t.flankRight);});
+    mb.forEach(m=>{const t=selectedTactics(m);if(!t)return;if(t.playingWidth>0)wW.push(t.playingWidth);if(t.teamDepth>0)dD.push(t.teamDepth);if(t.compactness>0)cC.push(t.compactness);fL.push(t.flankLeft);fC.push(t.flankCentre);fR.push(t.flankRight);});
     tacticalAvgs={playingWidth:avg(wW).toFixed(1),teamDepth:avg(dD).toFixed(1),compactness:avg(cC).toFixed(1),flankLeft:avg(fL).toFixed(1),flankCentre:avg(fC).toFixed(1),flankRight:avg(fR).toFixed(1),binaryMatches:mb.length};
   }
   const playerSerial={};
@@ -1504,8 +1559,8 @@ function confirmSaveAnalysis(){
     id:Date.now(),name,timestamp:new Date().toISOString(),matchCount:allMatches.length,
     record,teamStats,tacticalAvgs,playerStats:playerSerial,
     shotStats:{
-      home:{total:aggregateShots.filter(s=>s.side==='home').length,goals:aggregateShots.filter(s=>s.side==='home'&&s.outcome==='goal').length,xG:aggregateShots.filter(s=>s.side==='home').reduce((a,s)=>a+s.xG,0)},
-      away:{total:aggregateShots.filter(s=>s.side==='away').length,goals:aggregateShots.filter(s=>s.side==='away'&&s.outcome==='goal').length,xG:aggregateShots.filter(s=>s.side==='away').reduce((a,s)=>a+s.xG,0)},
+      home:{total:aggregateShots.filter(s=>{const m=allMatches.find(x=>String(x.matchId)===String(s.matchId));return m&&s.side===getSelectedSide(m);}).length,goals:aggregateShots.filter(s=>{const m=allMatches.find(x=>String(x.matchId)===String(s.matchId));return m&&s.side===getSelectedSide(m)&&s.outcome==='goal';}).length,xG:aggregateShots.filter(s=>{const m=allMatches.find(x=>String(x.matchId)===String(s.matchId));return m&&s.side===getSelectedSide(m);}).reduce((a,s)=>a+s.xG,0)},
+      away:{total:aggregateShots.filter(s=>{const m=allMatches.find(x=>String(x.matchId)===String(s.matchId));return m&&s.side===getOpponentSide(m);}).length,goals:aggregateShots.filter(s=>{const m=allMatches.find(x=>String(x.matchId)===String(s.matchId));return m&&s.side===getOpponentSide(m)&&s.outcome==='goal';}).length,xG:aggregateShots.filter(s=>{const m=allMatches.find(x=>String(x.matchId)===String(s.matchId));return m&&s.side===getOpponentSide(m);}).reduce((a,s)=>a+s.xG,0)},
     }
   });
   persistAnalyses();closeSaveModal();setStatus(`Analysis "${name}" saved`,'success');
@@ -1608,12 +1663,12 @@ function csvEscape(value) {
 // ═══════════════════════════════════════════════════════
 function downloadCSV(){
   if(!allMatches.length){alert('No data to export');return;}
-  const rows=[['Match ID','Date','Home Team','Away Team','Score','Home Goals','Away Goals','Home xG','Away xG','Home Shots','Away Shots','Home SoT','Away SoT','Home Shot Acc%','Away Shot Acc%','Home Poss%','Away Poss%','Home Passes','Away Passes','Home Pass Acc%','Away Pass Acc%','Home Def Duel%','Away Def Duel%','Home Formation','Away Formation','Home XI Overall','Away XI Overall','Home Playing Width','Away Playing Width','Home Def Line Height','Away Def Line Height','Home Compactness','Away Compactness','Home Flank L%','Away Flank L%','Home Flank C%','Away Flank C%','Home Flank R%','Away Flank R%']];
+  const rows=[['Match ID','Date','Selected Club','Opponent','Selected Side','Score','Selected Goals','Opponent Goals','Selected xG','Opponent xG','Selected Shots','Opponent Shots','Selected SoT','Opponent SoT','Selected Shot Acc%','Opponent Shot Acc%','Selected Poss%','Opponent Poss%','Selected Passes','Opponent Passes','Selected Pass Acc%','Opponent Pass Acc%','Selected Def Duel%','Opponent Def Duel%','Selected Formation','Opponent Formation','Selected XI Overall','Opponent XI Overall','Selected Playing Width','Opponent Playing Width','Selected Def Line Height','Opponent Def Line Height','Selected Compactness','Opponent Compactness','Selected Flank L%','Opponent Flank L%','Selected Flank C%','Opponent Flank C%','Selected Flank R%','Opponent Flank R%']];
   allMatches.forEach(m=>{
-    const h=m.report?.home,a=m.report?.away; if(!h||!a)return;
+    const ss=getSelectedSide(m), os=getOpponentSide(m);
+    const h=selectedTeam(m), a=opponentTeam(m); if(!h||!a)return;
     const hs=aggregateTeamStats(h.playersStats),as2=aggregateTeamStats(a.playersStats); if(!hs||!as2)return;
-    const hg=h.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
-    const ag=a.playersStats?.reduce((s,p)=>s+(p.goals||0),0)||0;
+    const hg=selectedGoals(m), ag=opponentGoals(m);
     const pAH=hs.passes>0?((hs.passesAccurate/hs.passes)*100).toFixed(1):'0';
     const pAA=as2.passes>0?((as2.passesAccurate/as2.passes)*100).toFixed(1):'0';
     const sAH=hs.shots>0?((hs.shotsOnTarget/hs.shots)*100).toFixed(1):'0';
@@ -1623,13 +1678,12 @@ function downloadCSV(){
     const tp=hp+ap,hPos=tp>0?((hp/tp)*100).toFixed(1):'50.0',aPos=tp>0?((ap/tp)*100).toFixed(1):'50.0';
     const ddH=(hs.defensiveDuelsWon+hs.dribbledPast>0)?((hs.defensiveDuelsWon/(hs.defensiveDuelsWon+hs.dribbledPast))*100).toFixed(1):'0';
     const ddA=(as2.defensiveDuelsWon+as2.dribbledPast>0)?((as2.defensiveDuelsWon/(as2.defensiveDuelsWon+as2.dribbledPast))*100).toFixed(1):'0';
-    let homeName='Home',awayName='Away',homeF='-',awayF='-',homeXI=0,awayXI=0;
-    if(m.formations){const pm=extractPlayerMap(m.formations),cn=clubNames(m.formations);homeName=cn.homeName;awayName=cn.awayName;if(m.formations.homeFormation){homeF=m.formations.homeFormation.type||'-';homeXI=computeXI(m.formations.homeFormation,pm);}if(m.formations.awayFormation){awayF=m.formations.awayFormation.type||'-';awayXI=computeXI(m.formations.awayFormation,pm);}}
-    const tac=m.binary?.tactics;
-    rows.push([m.matchId,new Date(m.date).toISOString(),homeName,awayName,`${hg}-${ag}`,hg,ag,hs.xG.toFixed(2),as2.xG.toFixed(2),hs.shots,as2.shots,hs.shotsOnTarget,as2.shotsOnTarget,sAH,sAA,hPos,aPos,hs.passes,as2.passes,pAH,pAA,ddH,ddA,homeF,awayF,homeXI,awayXI,tac?tac.home.playingWidth.toFixed(1):'-',tac?tac.away.playingWidth.toFixed(1):'-',tac?tac.home.teamDepth.toFixed(1):'-',tac?tac.away.teamDepth.toFixed(1):'-',tac?tac.home.compactness.toFixed(1):'-',tac?tac.away.compactness.toFixed(1):'-',tac?tac.home.flankLeft.toFixed(1):'-',tac?tac.away.flankLeft.toFixed(1):'-',tac?tac.home.flankCentre.toFixed(1):'-',tac?tac.away.flankCentre.toFixed(1):'-',tac?tac.home.flankRight.toFixed(1):'-',tac?tac.away.flankRight.toFixed(1):'-']);
+    const homeName=sideName(m,ss),awayName=sideName(m,os),homeF=sideFormation(m,ss)?.type||'-',awayF=sideFormation(m,os)?.type||'-',homeXI=sideXI(m,ss)||0,awayXI=sideXI(m,os)||0;
+    const tacS=selectedTactics(m), tacO=opponentTactics(m);
+    rows.push([m.matchId,new Date(m.date).toISOString(),homeName,awayName,ss,`${hg}-${ag}`,hg,ag,hs.xG.toFixed(2),as2.xG.toFixed(2),hs.shots,as2.shots,hs.shotsOnTarget,as2.shotsOnTarget,sAH,sAA,hPos,aPos,hs.passes,as2.passes,pAH,pAA,ddH,ddA,homeF,awayF,homeXI,awayXI,tacS?tacS.playingWidth.toFixed(1):'-',tacO?tacO.playingWidth.toFixed(1):'-',tacS?tacS.teamDepth.toFixed(1):'-',tacO?tacO.teamDepth.toFixed(1):'-',tacS?tacS.compactness.toFixed(1):'-',tacO?tacO.compactness.toFixed(1):'-',tacS?tacS.flankLeft.toFixed(1):'-',tacO?tacO.flankLeft.toFixed(1):'-',tacS?tacS.flankCentre.toFixed(1):'-',tacO?tacO.flankCentre.toFixed(1):'-',tacS?tacS.flankRight.toFixed(1):'-',tacO?tacO.flankRight.toFixed(1):'-']);
   });
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(csvEscape).join(',')).join('\n')],{type:'text/csv'}));
+  a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(csvEscape).join(',')).join('\\n')],{type:'text/csv'}));
   a.download=`mfl_analysis_${Date.now()}.csv`;
   document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
