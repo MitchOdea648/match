@@ -433,48 +433,84 @@ function isOnPitch(x, y) {
 }
 
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 // PROTOBUF / BINARY LOADING
 // ═══════════════════════════════════════════════════════
+
 function loadProtobuf() {
   return new Promise((resolve, reject) => {
-    if (window.protobuf) { resolve(); return; }
+    if (window.protobuf) {
+      resolve();
+      return;
+    }
+
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/protobufjs@7/dist/protobuf.min.js';
-    s.onload = resolve; s.onerror = reject;
+
+    s.onload = resolve;
+    s.onerror = reject;
+
     document.head.appendChild(s);
   });
 }
+
 async function fetchBin(url) {
-  const res = await fetch(`${WORKER}?url=${encodeURIComponent(url)}`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Worker ${res.status}`);
-  const buf = await res.arrayBuffer();
-  if (new Uint8Array(buf)[0] !== 0x0A) throw new Error('Bad binary');
-  return buf;
-}
-async function fetchViaWorkerFallback(url, options = {}) {
-  try {
-    const direct = await fetch(url, options);
-    if (direct.ok) return direct;
-    // If the API blocks direct browser access or returns an edge error, try the Worker fallback.
-    const proxied = await fetch(`${WORKER}?url=${encodeURIComponent(url)}`, options);
-    return proxied.ok ? proxied : direct;
-  } catch (directError) {
-    // Most commonly a CORS failure. Retry through the Worker.
-    return fetch(`${WORKER}?url=${encodeURIComponent(url)}`, options);
+  const res = await fetch(
+    `${WORKER}?url=${encodeURIComponent(url)}`
+  );
+
+  // IMPORTANT:
+  // MFL binary files often stop at part-5.bin
+  // and return 403 instead of 404 for missing parts.
+  // We treat both as "end of available parts"
+  // instead of a failed match.
+
+  if (res.status === 403 || res.status === 404) {
+    console.log('Stopping at missing part:', url);
+    return null;
   }
+
+  if (!res.ok) {
+    throw new Error(`Worker ${res.status}`);
+  }
+
+  const buf = await res.arrayBuffer();
+
+  // Validate protobuf binary
+  if (new Uint8Array(buf)[0] !== 0x0A) {
+    throw new Error('Bad binary');
+  }
+
+  return buf;
 }
 
 async function loadAllStates(matchId) {
   await loadProtobuf();
-  const States = protobuf.Root.fromJSON(PROTO_SCHEMA).lookupType('mfl.States');
+
+  const States = protobuf
+    .Root
+    .fromJSON(PROTO_SCHEMA)
+    .lookupType('mfl.States');
+
   const all = [];
+
   for (let part = 1; part <= 9; part++) {
-    const buf = await fetchBin(`${MFL_CDN}/${matchId}/data/part-${part}.bin`);
+
+    const buf = await fetchBin(
+      `${MFL_CDN}/${matchId}/data/part-${part}.bin`
+    );
+
+    // stop cleanly when no more parts exist
     if (!buf) break;
-    const dec = States.toObject(States.decode(new Uint8Array(buf)), {defaults:false});
+
+    const dec = States.toObject(
+      States.decode(new Uint8Array(buf)),
+      { defaults: false }
+    );
+
     all.push(...dec.states);
   }
+
   return all;
 }
 
