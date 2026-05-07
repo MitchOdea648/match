@@ -1064,22 +1064,36 @@ function renderTacticalOverview() {
   const posHP=Array.from({length:11},()=>({xs:[],ys:[]}));
   const posHD=Array.from({length:11},()=>({xs:[],ys:[]}));
   const wW=[],dD=[],cC=[],fL=[],fC=[],fR=[];
-  let lastSide='home';
+
+  // For the combined overview, every match must be normalised into the
+  // selected-club view before averaging. Home and away raw coordinates are
+  // opposite directions, so mixing them without this creates the centre-cluster bug.
+  const orientForSelectedOverview=(m,p)=>{
+    if(getSelectedSide(m)==='away') return {index:p.index,x:PITCH_W-p.x,y:PITCH_H-p.y};
+    return {index:p.index,x:p.x,y:p.y};
+  };
+  const pushPos=(store,m,p)=>{
+    if(!p || p.index == null) return;
+    const q=orientForSelectedOverview(m,p);
+    store[q.index].xs.push(q.x);
+    store[q.index].ys.push(q.y);
+  };
+
   mb.forEach(m=>{
-    const side=getSelectedSide(m), t=selectedTactics(m); lastSide=side;
+    const t=selectedTactics(m);
     if(t.playingWidth>0)wW.push(t.playingWidth);
     if(t.teamDepth>0)dD.push(t.teamDepth);
     if(t.compactness>0)cC.push(t.compactness);
     fL.push(t.flankLeft);fC.push(t.flankCentre);fR.push(t.flankRight);
-    t.avgPositions?.forEach(p=>{posH[p.index].xs.push(p.x);posH[p.index].ys.push(p.y);});
-    t.avgPossPositions?.forEach(p=>{posHP[p.index].xs.push(p.x);posHP[p.index].ys.push(p.y);});
-    t.avgDefPositions?.forEach(p=>{posHD[p.index].xs.push(p.x);posHD[p.index].ys.push(p.y);});
+    t.avgPositions?.forEach(p=>pushPos(posH,m,p));
+    t.avgPossPositions?.forEach(p=>pushPos(posHP,m,p));
+    t.avgDefPositions?.forEach(p=>pushPos(posHD,m,p));
   });
   const mkPos=acc=>acc.map((p,i)=>p.xs.length?{index:i,x:avg(p.xs),y:avg(p.ys)}:null).filter(Boolean);
   document.getElementById('overview-pitch-trio').innerHTML=`
-    <div><div class="pitch-card-label home">Overall</div>${renderPitchSVG(mkPos(posH),lastSide,160,240)}</div>
-    <div><div class="pitch-card-label home">In Possession</div>${renderPitchSVG(mkPos(posHP),lastSide,160,240)}</div>
-    <div><div class="pitch-card-label home">Defensive</div>${renderPitchSVG(mkPos(posHD),lastSide,160,240)}</div>`;
+    <div><div class="pitch-card-label home">Overall</div>${renderPitchSVG(mkPos(posH),'home',160,240)}</div>
+    <div><div class="pitch-card-label home">In Possession</div>${renderPitchSVG(mkPos(posHP),'home',160,240)}</div>
+    <div><div class="pitch-card-label home">Defensive</div>${renderPitchSVG(mkPos(posHD),'home',160,240)}</div>`;
 
   const aw=avg(wW),ad=avg(dD),ac=avg(cC),al=avg(fL),actr=avg(fC),ar=avg(fR);
   const mbar=(label,val,max,suffix,tip)=>{
